@@ -1,0 +1,78 @@
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap');
+@import 'tailwindcss';
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body { margin: 0; min-width: 320px; background: #f7f8f5; font-family: 'Manrope', sans-serif; color: #1d2b23; }
+button { cursor: pointer; }
+
+.logo-mark { position: relative; display: flex; width: 27px; height: 27px; align-items: end; gap: 2px; transform: rotate(-15deg); }
+.logo-mark span { display: block; width: 7px; border-radius: 8px; background: #173f32; }
+.logo-mark span:nth-child(1) { height: 12px; }
+.logo-mark span:nth-child(2) { height: 22px; background: #4f836f; }
+.logo-mark span:nth-child(3) { height: 16px; background: #e4ff73; }
+
+.nav-item { display: flex; width: 100%; align-items: center; gap: 13px; border-radius: 12px; padding: 11px 13px; color: #78827c; font-size: 12px; font-weight: 600; transition: .2s ease; border: 0; background: transparent; }
+.nav-item:hover { background: #f5f7f4; color: #29483a; }
+.nav-item.active { background: #eaf2ed; color: #174431; font-weight: 800; }
+
+.hero-grid { position: relative; min-height: 310px; background-image: linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px); background-size: 32px 32px; }
+.hero-orbit { position: absolute; right: 8%; top: 50%; width: 230px; height: 230px; transform: translateY(-50%); border: 1px solid rgba(255,255,255,.13); border-radius: 50%; }
+.orbit-center { position: absolute; left: 50%; top: 50%; display: grid; width: 72px; height: 72px; place-items: center; transform: translate(-50%,-50%); border-radius: 24px; background: #e4ff73; color: #173f32; font-weight: 800; font-size: 12px; }
+.orbit-card { position: absolute; display: grid; width: 52px; height: 52px; place-items: center; border: 1px solid rgba(255,255,255,.2); border-radius: 16px; backdrop-filter: blur(10px); font-size: 10px; font-weight: 800; color: white; }
+.card-a { left: -12px; top: 40px; background: rgba(99,174,143,.35); }
+.card-b { right: -8px; top: 72px; background: rgba(164,132,223,.35); }
+.card-c { bottom: -5px; left: 85px; background: rgba(223,170,105,.3); }
+
+@keyframes fadeSlideUp {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-page {
+  animation: fadeSlideUp 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.card-hover {
+  transition: transform 0.25s ease, box-shadow 0.25s ease;
+}
+.card-hover:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 14px 30px -10px rgba(23, 63, 50, 0.12);
+}
+
+@keyframes fadeSlideUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes modalPop {
+  from { opacity: 0; transform: scale(0.96) translateY(8px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes toastSlideIn {
+  from { opacity: 0; transform: translateX(24px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.animate-page {
+  animation: fadeSlideUp 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-modal {
+  animation: modalPop 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-toast {
+  animation: toastSlideIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.card-hover {
+  transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;
+}
+.card-hover:hover {
+  transform: translateY(-3px);
+  border-color: #c5d4cb;
+  box-shadow: 0 12px 28px -8px rgba(23, 63, 50, 0.1);
+}
