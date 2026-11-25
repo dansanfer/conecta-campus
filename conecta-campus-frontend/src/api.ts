@@ -1,6 +1,6 @@
-const API_URL = 'http://127.0.0.1:8000'
+const API_URL = import.meta.env.DEV ? 'http://127.0.0.1:8000' : ''
 
-export function getToken() {
+export function getToken(): string | null {
   return localStorage.getItem('cc_token')
 }
 
@@ -14,23 +14,20 @@ export function clearToken() {
 
 export async function apiFetch(endpoint: string, options: RequestInit = {}) {
   const token = getToken()
-  const headers: Record<string, string> = {
-    ...(options.headers as Record<string, string>),
-  }
-
+  const headers = new Headers(options.headers || {})
   if (token) {
-    headers['Authorization'] = `Bearer ${token}`
+    headers.set('Authorization', `Bearer ${token}`)
   }
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
+  const res = await fetch(`${API_URL}${endpoint}`, {
     ...options,
     headers,
   })
 
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({ detail: 'Erro na requisição' }))
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Erro na requisição' }))
     throw new Error(err.detail || 'Erro inesperado')
   }
 
-  return response.json()
+  return res.json()
 }

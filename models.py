@@ -2,6 +2,12 @@ from datetime import datetime
 from typing import Optional
 from sqlmodel import Field, SQLModel
 
+class Curso(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    nome: str = Field(unique=True, index=True)
+    area: str  # Ex: Tecnologia, Saúde, Humanas, Exatas
+    ativo: bool = True
+
 class Usuario(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     nome: str
@@ -10,7 +16,7 @@ class Usuario(SQLModel, table=True):
     data_nascimento: str
     senha_hash: str
     curso: str
-    papel: str = "ALUNO"  # ALUNO, PROFESSOR, VISITANTE
+    papel: str = "ALUNO"  # ALUNO, PROFESSOR, VISITANTE, GESTOR
     foto_url: Optional[str] = None
     bio: Optional[str] = None
     competencias: Optional[str] = None
@@ -26,8 +32,8 @@ class Projeto(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     titulo: str
     categoria: str
-    status: str = "ABERTO"          # ABERTO, EM_ANDAMENTO, CONCLUIDO, CANCELADO
-    modalidade: str = "PRESENCIAL"  # PRESENCIAL, SEMIPRESENCIAL, REMOTO
+    status: str = "ABERTO"
+    modalidade: str = "PRESENCIAL"
     localizacao: Optional[str] = None
     link_reuniao: Optional[str] = None
     link_entrega: Optional[str] = None
@@ -66,9 +72,9 @@ class Candidatura(SQLModel, table=True):
 
 class Mentoria(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    tipo: str = "Mentoria"          # Mentoria, Palestra, Workshop
-    status: str = "AGENDADA"        # AGENDADA, ADIADA, CANCELADA
-    modalidade: str = "PRESENCIAL"  # PRESENCIAL, SEMIPRESENCIAL, REMOTO
+    tipo: str = "Mentoria"
+    status: str = "AGENDADA"
+    modalidade: str = "PRESENCIAL"
     localizacao: Optional[str] = None
     link_reuniao: Optional[str] = None
     capacidade: int = 1
@@ -93,3 +99,14 @@ class Mensagem(SQLModel, table=True):
     remetente_nome: str
     texto: str
     enviada_em: str = Field(default_factory=lambda: datetime.now().strftime("%H:%M"))
+
+class ChamadoSuporte(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    usuario_id: int = Field(foreign_key="usuario.id")
+    usuario_nome: str
+    usuario_papel: str
+    assunto: str
+    mensagem: str
+    resposta_gestor: Optional[str] = None
+    status: str = "ABERTO"  # ABERTO, RESPONDIDO
+    criado_em: str = Field(default_factory=lambda: datetime.now().strftime("%d/%m/%Y %H:%M"))

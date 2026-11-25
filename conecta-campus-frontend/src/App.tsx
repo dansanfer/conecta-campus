@@ -1,6 +1,13 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { apiFetch, clearToken, getToken, setToken } from './api'
 
+interface CursoItem {
+  id: number
+  nome: string
+  area: string
+  ativo: boolean
+}
+
 interface Usuario {
   id: number
   nome: string
@@ -8,7 +15,7 @@ interface Usuario {
   cpf: string
   data_nascimento: string
   curso: string
-  papel: 'ALUNO' | 'PROFESSOR' | 'VISITANTE'
+  papel: 'ALUNO' | 'PROFESSOR' | 'VISITANTE' | 'GESTOR'
   foto_url?: string
   bio?: string
   competencias?: string
@@ -91,6 +98,27 @@ interface Mensagem {
   enviada_em: string
 }
 
+interface ChamadoSuporte {
+  id: number
+  usuario_nome: string
+  usuario_papel: string
+  assunto: string
+  mensagem: string
+  resposta_gestor?: string
+  status: string
+  criado_em: string
+}
+
+interface MetricasGestor {
+  total_usuarios: number
+  total_alunos: number
+  total_professores: number
+  total_projetos: number
+  projetos_concluidos: number
+  total_sessoes: number
+  chamados_abertos: number
+}
+
 interface ToastState {
   mensagem: string
   tipo: 'sucesso' | 'erro'
@@ -112,7 +140,7 @@ function formatarModalidadeLabel(mod: string) {
 export default function App() {
   const [token, setAuthToken] = useState<string | null>(getToken())
   const [usuario, setUsuario] = useState<Usuario | null>(null)
-  const [page, setPage] = useState<'inicio' | 'equipes' | 'mentorias' | 'mensagens' | 'perfil'>('inicio')
+  const [page, setPage] = useState<'inicio' | 'equipes' | 'mentorias' | 'mensagens' | 'suporte' | 'gestor' | 'perfil'>('inicio')
   const [menuMobileAberto, setMenuMobileAberto] = useState(false)
   const [toast, setToast] = useState<ToastState | null>(null)
 
@@ -120,6 +148,10 @@ export default function App() {
     setToast({ mensagem, tipo })
     setTimeout(() => setToast(null), 4000)
   }
+
+  // Cursos vindos do banco de dados
+  const [cursosAtivos, setCursosAtivos] = useState<CursoItem[]>([])
+  const [todosCursosGestor, setTodosCursosGestor] = useState<CursoItem[]>([])
 
   // Login / Cadastro
   const [modoCadastro, setModoCadastro] = useState(false)
@@ -132,10 +164,12 @@ export default function App() {
   const [papel, setPapel] = useState<'ALUNO' | 'PROFESSOR' | 'VISITANTE'>('ALUNO')
 
   function limparCamposAuth() {
-    setEmail(''); setSenha(''); setNome(''); setCpf(''); setDataNascimento(''); setCurso(''); setPapel('ALUNO')
+    setEmail(''); setSenha(''); setNome(''); setCpf(''); setDataNascimento(''); setPapel('ALUNO')
+    if (cursosAtivos.length > 0) setCurso(cursosAtivos[0].nome)
+    else setCurso('')
   }
 
-  // Dados
+  // Dados gerais
   const [projetos, setProjetos] = useState<Projeto[]>([])
   const [filtroCategoria, setFiltroCategoria] = useState('Todas')
   const [mentorias, setMentorias] = useState<Mentoria[]>([])
@@ -143,6 +177,15 @@ export default function App() {
   const [conversaAtiva, setConversaAtiva] = useState<Conversa | null>(null)
   const [mensagens, setMensagens] = useState<Mensagem[]>([])
   const [novaMsg, setNovaMsg] = useState('')
+
+  // Suporte e Gestor
+  const [chamados, setChamados] = useState<ChamadoSuporte[]>([])
+  const [assuntoSuporte, setAssuntoSuporte] = useState('')
+  const [msgSuporte, setMsgSuporte] = useState('')
+  const [metricasGestor, setMetricasGestor] = useState<MetricasGestor | null>(null)
+  const [novoCursoNome, setNovoCursoNome] = useState('')
+  const [novoCursoArea, setNovoCursoArea] = useState('Tecnologia')
+  const [respostasChamados, setRespostasChamados] = useState<Record<number, string>>({})
 
   // Modais
   const [modalNovoProjeto, setModalNovoProjeto] = useState(false)
@@ -197,7 +240,7 @@ export default function App() {
   const [editMentHorario, setEditMentHorario] = useState('')
   const [editMentStatus, setEditMentStatus] = useState('AGENDADA')
 
-  // Form Edição Perfil
+  // Form Edição Perfil + Preview da Foto
   const [editNome, setEditNome] = useState('')
   const [editCurso, setEditCurso] = useState('')
   const [editNascimento, setEditNascimento] = useState('')
@@ -205,14 +248,31 @@ export default function App() {
   const [competencias, setCompetencias] = useState('')
   const [linkedin, setLinkedin] = useState('')
   const [fotoPerfil, setFotoPerfil] = useState<File | null>(null)
+  const [previewFotoPerfil, setPreviewFotoPerfil] = useState<string | null>(null)
 
   function navegarPara(destino: typeof page) {
     setPage(destino)
     setMenuMobileAberto(false)
   }
 
+  async function carregarCursosPublicos() {
+    try {
+      const lista: CursoItem[] = await apiFetch('/cursos?apenas_ativos=true')
+      setCursosAtivos(lista)
+      if (lista.length > 0 && !curso) setCurso(lista[0].nome)
+    } catch {
+      // ignora se servidor ainda estiver subindo
+    }
+  }
+
+  useEffect(() => {
+    carregarCursosPublicos()
+  }, [])
+
   async function carregarDados() {
     try {
+      await carregarCursosPublicos()
+
       const perfilData: Usuario = await apiFetch('/perfil')
       setUsuario(perfilData)
       setEditNome(perfilData.nome)
@@ -236,6 +296,16 @@ export default function App() {
 
       const convData = await apiFetch('/minhas-conversas')
       setConversas(convData)
+
+      const chamadosData = await apiFetch('/suporte')
+      setChamados(chamadosData)
+
+      if (perfilData.papel === 'GESTOR') {
+        const metData = await apiFetch('/gestor/metricas')
+        setMetricasGestor(metData)
+        const todosCursos = await apiFetch('/cursos?apenas_ativos=false')
+        setTodosCursosGestor(todosCursos)
+      }
     } catch (err: any) {
       notificar(`Erro de sessão: ${err.message}`, 'erro')
     }
@@ -254,10 +324,11 @@ export default function App() {
     e.preventDefault()
     try {
       if (modoCadastro) {
+        const cursoFinal = papel === 'VISITANTE' ? curso : (curso || cursosAtivos[0]?.nome || 'Não informado')
         await apiFetch('/cadastro', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ nome, email, cpf, data_nascimento: dataNascimento, senha, curso, papel }),
+          body: JSON.stringify({ nome, email, cpf, data_nascimento: dataNascimento, senha, curso: cursoFinal, papel }),
         })
         limparCamposAuth()
         setModoCadastro(false)
@@ -269,7 +340,8 @@ export default function App() {
       form.append('username', email)
       form.append('password', senha)
 
-      const res = await fetch('http://127.0.0.1:8000/login', { method: 'POST', body: form })
+      const loginUrl = import.meta.env.DEV ? 'http://127.0.0.1:8000/login' : '/login'
+      const res = await fetch(loginUrl, { method: 'POST', body: form })
       if (!res.ok) throw new Error('E-mail ou senha inválidos')
       const data = await res.json()
       limparCamposAuth()
@@ -287,7 +359,17 @@ export default function App() {
     setAuthToken(null)
     setUsuario(null)
     setConversaAtiva(null)
+    setPreviewFotoPerfil(null)
     setPage('inicio')
+  }
+
+  function handleSelecionarFotoPerfil(file: File | null) {
+    setFotoPerfil(file)
+    if (file) {
+      setPreviewFotoPerfil(URL.createObjectURL(file))
+    } else {
+      setPreviewFotoPerfil(null)
+    }
   }
 
   function atualizarCampoVagaNovoProjeto(index: number, campo: keyof Vaga, valor: string | number) {
@@ -537,7 +619,67 @@ export default function App() {
 
       await apiFetch('/perfil', { method: 'PUT', body: formData })
       setFotoPerfil(null)
-      notificar('Seu perfil foi atualizado com sucesso!', 'sucesso')
+      setPreviewFotoPerfil(null)
+      notificar('Seu perfil e foto foram atualizados!', 'sucesso')
+      carregarDados()
+    } catch (err: any) {
+      notificar(err.message, 'erro')
+    }
+  }
+
+  // --- AÇÕES DE SUPORTE E GESTOR ---
+  async function handleAbrirChamadoSuporte(e: FormEvent) {
+    e.preventDefault()
+    try {
+      const res = await apiFetch('/suporte', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ assunto: assuntoSuporte, mensagem: msgSuporte }),
+      })
+      setAssuntoSuporte(''); setMsgSuporte('')
+      notificar(res.mensagem, 'sucesso')
+      carregarDados()
+    } catch (err: any) {
+      notificar(err.message, 'erro')
+    }
+  }
+
+  async function handleResponderChamadoGestor(chamadoId: number) {
+    const texto = respostasChamados[chamadoId]
+    if (!texto || !texto.trim()) return
+    try {
+      const res = await apiFetch(`/suporte/${chamadoId}/responder`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ resposta_gestor: texto }),
+      })
+      notificar(res.mensagem, 'sucesso')
+      carregarDados()
+    } catch (err: any) {
+      notificar(err.message, 'erro')
+    }
+  }
+
+  async function handleCadastrarCursoGestor(e: FormEvent) {
+    e.preventDefault()
+    try {
+      const res = await apiFetch('/cursos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nome: novoCursoNome, area: novoCursoArea }),
+      })
+      setNovoCursoNome('')
+      notificar(res.mensagem, 'sucesso')
+      carregarDados()
+    } catch (err: any) {
+      notificar(err.message, 'erro')
+    }
+  }
+
+  async function handleToggleCursoGestor(cursoId: number) {
+    try {
+      const res = await apiFetch(`/cursos/${cursoId}/toggle`, { method: 'PATCH' })
+      notificar(res.mensagem, 'sucesso')
       carregarDados()
     } catch (err: any) {
       notificar(err.message, 'erro')
@@ -556,66 +698,152 @@ export default function App() {
     </div>
   ) : null
 
-  // --- TELA DE LOGIN / CADASTRO ---
+  // --- TELA DE LOGIN / CADASTRO SPLIT-SCREEN ---
   if (!token) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[#F7F8F5] p-4">
+      <div className="flex min-h-screen bg-[#F7F8F5]">
         {ToastBanner}
-        <div className="animate-page w-full max-w-md rounded-[24px] border border-[#E5E8E4] bg-white p-6 sm:p-8 shadow-sm">
-          <div className="mb-6 flex items-center gap-3">
-            <span className="logo-mark"><span /><span /><span /></span>
-            <span className="text-lg font-extrabold">conecta<span className="text-[#4F836F]">campus</span></span>
+
+        {/* Coluna Esquerda: Painel Visual Minimalista Animado (Oculto em celulares) */}
+        <div className="hero-grid relative hidden w-1/2 flex-col justify-between overflow-hidden bg-[#173F32] p-12 text-white lg:flex">
+          <div className="animate-pulse-ring pointer-events-none absolute -right-24 -top-24 h-[420px] w-[420px] rounded-full border border-[#E4FF73]/25" />
+          <div className="animate-pulse-ring pointer-events-none absolute -bottom-32 -left-20 h-[360px] w-[360px] rounded-full border border-white/15" />
+
+          {/* Logo Superior */}
+          <div className="relative z-10 flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/10 backdrop-blur-xs">
+              <span className="logo-mark"><span /><span /><span /></span>
+            </div>
+            <span className="text-xl font-extrabold tracking-tight">
+              conecta<span className="text-[#E4FF73]">campus</span>
+            </span>
           </div>
-          <h1 className="text-2xl font-bold text-[#1D2B23]">
-            {modoCadastro ? 'Criar conta acadêmica' : 'Acesse a plataforma'}
-          </h1>
-          <p className="mt-1 text-xs text-[#78827C]">
-            {modoCadastro ? 'Preencha seus dados oficiais (1 conta por CPF).' : 'Entre com seu e-mail e senha cadastrados.'}
-          </p>
 
-          <form key={modoCadastro ? 'form-cadastro' : 'form-login'} onSubmit={handleAuth} autoComplete="off" className="mt-5 space-y-3.5">
-            {modoCadastro && (
-              <>
-                <div>
-                  <label className="mb-1 block text-[11px] font-bold text-[#5C6B63]">Tipo de Perfil</label>
-                  <select value={papel} onChange={e => setPapel(e.target.value as any)}
-                    className="w-full rounded-xl border border-[#E2E6E2] bg-[#F7F8F5] px-4 py-3 text-xs font-semibold outline-none">
-                    <option value="ALUNO">Sou Aluno(a)</option>
-                    <option value="PROFESSOR">Sou Professor(a) / Orientador</option>
-                    <option value="VISITANTE">Sou Visitante / Comunidade Externa</option>
-                  </select>
-                </div>
-                <input required autoComplete="off" placeholder="Nome completo" value={nome} onChange={e => setNome(e.target.value)}
-                  className="w-full rounded-xl border border-[#E2E6E2] px-4 py-3 text-xs outline-none focus:border-[#173F32]" />
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <input required autoComplete="off" placeholder="CPF (somente números)" maxLength={14} value={cpf} onChange={e => setCpf(e.target.value)}
-                    className="w-full rounded-xl border border-[#E2E6E2] px-4 py-3 text-xs outline-none focus:border-[#173F32]" />
-                  <input required autoComplete="off" type="text" inputMode="numeric" placeholder="Nascimento (DD/MM/AAAA)" maxLength={10}
-                    value={dataNascimento} onChange={e => setDataNascimento(formatarDataInput(e.target.value))}
-                    className="w-full rounded-xl border border-[#E2E6E2] px-4 py-3 text-xs outline-none focus:border-[#173F32]" />
-                </div>
-                <input required autoComplete="off" placeholder={papel === 'VISITANTE' ? 'Empresa ou Instituição' : 'Curso (ex: ADS, Engenharia)'}
-                  value={curso} onChange={e => setCurso(e.target.value)}
-                  className="w-full rounded-xl border border-[#E2E6E2] px-4 py-3 text-xs outline-none focus:border-[#173F32]" />
-              </>
-            )}
-            <input required autoComplete="off" type="email" placeholder="E-mail" value={email} onChange={e => setEmail(e.target.value)}
-              className="w-full rounded-xl border border-[#E2E6E2] px-4 py-3 text-xs outline-none focus:border-[#173F32]" />
-            <input required autoComplete="new-password" type="password" placeholder="Senha" value={senha} onChange={e => setSenha(e.target.value)}
-              className="w-full rounded-xl border border-[#E2E6E2] px-4 py-3 text-xs outline-none focus:border-[#173F32]" />
+          {/* Composição Minimalista Central (Livros + Objetos Acadêmicos Flutuantes) */}
+          <div className="relative z-10 my-auto flex flex-col items-center">
+            <div className="relative h-72 w-full max-w-md">
+              {/* Card Flutuante 1: Pilha Minimalista de Livros */}
+              <div className="animate-float-slow absolute left-4 top-2 w-60 rounded-2xl border border-white/15 bg-white/10 p-5 backdrop-blur-md shadow-2xl">
+                <svg viewBox="0 0 180 95" className="w-full" fill="none">
+                  <rect x="14" y="64" width="142" height="18" rx="4" fill="#E4FF73" />
+                  <rect x="22" y="68" width="126" height="10" rx="2" fill="#173F32" opacity="0.2" />
+                  <rect x="26" y="42" width="136" height="18" rx="4" fill="#63AE8F" />
+                  <line x1="36" y1="51" x2="150" y2="51" stroke="#173F32" strokeWidth="2" strokeLinecap="round" opacity="0.35" />
+                  <rect x="18" y="20" width="128" height="18" rx="4" fill="#F7F8F5" />
+                  <rect x="115" y="20" width="12" height="24" rx="2" fill="#E4FF73" />
+                </svg>
+                <p className="mt-2 text-xs font-extrabold text-white">Pesquisa & Extensão</p>
+                <p className="text-[11px] text-[#C7D8D0]">Projetos interdisciplinares reais</p>
+              </div>
 
-            <button type="submit" className="w-full rounded-xl bg-[#173F32] py-3 text-xs font-bold text-white transition hover:bg-[#245847]">
-              {modoCadastro ? 'Finalizar Cadastro' : 'Entrar'}
+              {/* Card Flutuante 2: Conexão de Equipe */}
+              <div className="animate-float-reverse absolute bottom-2 right-2 w-64 rounded-2xl border border-white/15 bg-[#205141]/90 p-5 backdrop-blur-md shadow-2xl">
+                <div className="flex items-center gap-3">
+                  <div className="flex -space-x-2">
+                    <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#E4FF73] text-[10px] font-extrabold text-[#173F32]">DEV</span>
+                    <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#63AE8F] text-[10px] font-extrabold text-white">UX</span>
+                    <span className="flex h-8 w-8 items-center justify-center rounded-full bg-white text-[10px] font-extrabold text-[#173F32]">TCC</span>
+                  </div>
+                  <div>
+                    <span className="block text-xs font-bold text-white">Equipes Multidisciplinares</span>
+                    <span className="text-[10px] text-[#C9E7D7]">+ Mentorias e Horas Validadas</span>
+                  </div>
+                </div>
+                <div className="mt-3.5 h-1.5 w-full overflow-hidden rounded-full bg-white/15">
+                  <div className="h-full w-3/4 rounded-full bg-[#E4FF73]" />
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-8 max-w-md text-center">
+              <h2 className="text-2xl font-extrabold leading-snug">
+                Conecte talentos, cursos e ideias dentro da faculdade.
+              </h2>
+              <p className="mt-2 text-xs leading-relaxed text-[#C7D8D0]">
+                Encontre colegas para seu TCC, participe de workshops certificados e construa seu portfólio acadêmico.
+              </p>
+            </div>
+          </div>
+
+          {/* Rodapé Institucional */}
+          <div className="relative z-10 flex items-center justify-between border-t border-white/10 pt-4 text-[11px] text-[#C7D8D0]">
+            <span>Plataforma Acadêmica Integrada</span>
+            <span className="rounded-full bg-white/10 px-3 py-1 font-semibold text-[#E4FF73]">Acesso Institucional</span>
+          </div>
+        </div>
+
+        {/* Coluna Direita: Formulário de Login / Cadastro */}
+        <div className="flex w-full items-center justify-center p-4 sm:p-8 lg:w-1/2">
+          <div className="animate-page w-full max-w-md rounded-[26px] border border-[#E5E8E4] bg-white p-6 sm:p-9 shadow-sm">
+            <div className="mb-6 flex items-center gap-3 lg:hidden">
+              <span className="logo-mark"><span /><span /><span /></span>
+              <span className="text-lg font-extrabold">conecta<span className="text-[#4F836F]">campus</span></span>
+            </div>
+
+            <h1 className="text-2xl font-extrabold text-[#1D2B23]">
+              {modoCadastro ? 'Criar conta acadêmica' : 'Bem-vindo de volta'}
+            </h1>
+            <p className="mt-1 text-xs text-[#78827C]">
+              {modoCadastro ? 'Preencha seus dados oficiais (1 conta por CPF).' : 'Entre com suas credenciais institucionais para continuar.'}
+            </p>
+
+            <form key={modoCadastro ? 'form-cadastro' : 'form-login'} onSubmit={handleAuth} autoComplete="off" className="mt-6 space-y-3.5">
+              {modoCadastro && (
+                <>
+                  <div>
+                    <label className="mb-1 block text-[11px] font-bold text-[#5C6B63]">Tipo de Perfil</label>
+                    <select value={papel} onChange={e => setPapel(e.target.value as any)}
+                      className="w-full rounded-xl border border-[#E2E6E2] bg-[#F7F8F5] px-4 py-3 text-xs font-semibold outline-none">
+                      <option value="ALUNO">Sou Aluno(a)</option>
+                      <option value="PROFESSOR">Sou Professor(a) / Orientador</option>
+                      <option value="VISITANTE">Sou Visitante / Comunidade Externa</option>
+                    </select>
+                  </div>
+                  <input required autoComplete="off" placeholder="Nome completo" value={nome} onChange={e => setNome(e.target.value)}
+                    className="w-full rounded-xl border border-[#E2E6E2] px-4 py-3 text-xs outline-none focus:border-[#173F32]" />
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <input required autoComplete="off" placeholder="CPF (somente números)" maxLength={14} value={cpf} onChange={e => setCpf(e.target.value)}
+                      className="w-full rounded-xl border border-[#E2E6E2] px-4 py-3 text-xs outline-none focus:border-[#173F32]" />
+                    <input required autoComplete="off" type="text" inputMode="numeric" placeholder="Nascimento (DD/MM/AAAA)" maxLength={10}
+                      value={dataNascimento} onChange={e => setDataNascimento(formatarDataInput(e.target.value))}
+                      className="w-full rounded-xl border border-[#E2E6E2] px-4 py-3 text-xs outline-none focus:border-[#173F32]" />
+                  </div>
+
+                  {papel === 'VISITANTE' ? (
+                    <input required autoComplete="off" placeholder="Empresa ou Instituição Externa"
+                      value={curso} onChange={e => setCurso(e.target.value)}
+                      className="w-full rounded-xl border border-[#E2E6E2] px-4 py-3 text-xs outline-none focus:border-[#173F32]" />
+                  ) : (
+                    <div>
+                      <label className="mb-1 block text-[11px] font-bold text-[#5C6B63]">Curso na Instituição</label>
+                      <select required value={curso} onChange={e => setCurso(e.target.value)}
+                        className="w-full rounded-xl border border-[#E2E6E2] bg-white px-4 py-3 text-xs font-semibold outline-none focus:border-[#173F32]">
+                        {cursosAtivos.map(c => (
+                          <option key={c.id} value={c.nome}>{c.nome} ({c.area})</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </>
+              )}
+              <input required autoComplete="off" type="email" placeholder="E-mail" value={email} onChange={e => setEmail(e.target.value)}
+                className="w-full rounded-xl border border-[#E2E6E2] px-4 py-3 text-xs outline-none focus:border-[#173F32]" />
+              <input required autoComplete="new-password" type="password" placeholder="Senha" value={senha} onChange={e => setSenha(e.target.value)}
+                className="w-full rounded-xl border border-[#E2E6E2] px-4 py-3 text-xs outline-none focus:border-[#173F32]" />
+
+              <button type="submit" className="w-full rounded-xl bg-[#173F32] py-3 text-xs font-bold text-white transition hover:bg-[#245847]">
+                {modoCadastro ? 'Finalizar Cadastro' : 'Entrar'}
+              </button>
+            </form>
+
+            <button
+              type="button"
+              onClick={() => { limparCamposAuth(); setModoCadastro(!modoCadastro) }}
+              className="mt-5 w-full text-center text-xs font-semibold text-[#4F836F] hover:underline"
+            >
+              {modoCadastro ? 'Já possui conta? Fazer login' : 'Primeiro acesso? Criar conta'}
             </button>
-          </form>
-
-          <button
-            type="button"
-            onClick={() => { limparCamposAuth(); setModoCadastro(!modoCadastro) }}
-            className="mt-5 w-full text-center text-xs font-semibold text-[#4F836F]"
-          >
-            {modoCadastro ? 'Já possui conta? Fazer login' : 'Primeiro acesso? Criar conta'}
-          </button>
+          </div>
         </div>
       </div>
     )
@@ -653,6 +881,22 @@ export default function App() {
               </span>
             )}
           </button>
+
+          {usuario?.papel === 'GESTOR' ? (
+            <button onClick={() => navegarPara('gestor')} className={`nav-item justify-between ${page === 'gestor' ? 'active' : ''}`}>
+              <span>Painel do Gestor</span>
+              {metricasGestor && metricasGestor.chamados_abertos > 0 && (
+                <span className="rounded-full bg-amber-200 px-2 py-0.5 text-[10px] font-extrabold text-amber-900">
+                  {metricasGestor.chamados_abertos}
+                </span>
+              )}
+            </button>
+          ) : (
+            <button onClick={() => navegarPara('suporte')} className={`nav-item ${page === 'suporte' ? 'active' : ''}`}>
+              Falar com o Suporte
+            </button>
+          )}
+
           <button onClick={() => navegarPara('perfil')} className={`nav-item ${page === 'perfil' ? 'active' : ''}`}>Meu Perfil</button>
         </nav>
 
@@ -661,7 +905,7 @@ export default function App() {
             <p className="text-xs font-bold text-[#254437]">Complete seu perfil</p>
             <span className="text-xs font-bold text-[#4F836F]">→</span>
           </div>
-          <p className="mt-1 text-[11px] text-[#718078]">Clique para editar foto, bio e skills.</p>
+          <p className="mt-1 text-[11px] text-[#718078]">Clique para trocar foto, bio e skills.</p>
           <div className="mt-3 h-1.5 rounded-full bg-white">
             <div className="h-full rounded-full bg-[#4F836F] transition-all duration-500" style={{ width: `${usuario?.perfil_progresso || 40}%` }} />
           </div>
@@ -774,7 +1018,6 @@ export default function App() {
                       <h3 className="mt-3 text-lg font-bold">{p.titulo}</h3>
                       <p className="text-[11px] text-[#859087]">Líder: {p.criador_nome}</p>
 
-                      {/* Bloco de Localização / Link conforme Modalidade */}
                       {(p.localizacao || p.link_reuniao) && (
                         <div className="mt-2.5 rounded-xl bg-[#F7F8F5] px-3 py-2 text-[11px] text-[#4A5850]">
                           {p.localizacao && <p><strong>Local:</strong> {p.localizacao}</p>}
@@ -791,7 +1034,6 @@ export default function App() {
 
                       <p className="mt-2.5 text-xs leading-relaxed text-[#667169]">{p.descricao}</p>
 
-                      {/* Botão de Entrega Final se Concluído */}
                       {p.status === 'CONCLUIDO' && p.link_entrega && (
                         <a
                           href={p.link_entrega}
@@ -1038,30 +1280,215 @@ export default function App() {
             </div>
           )}
 
-          {page === 'perfil' && (
-            <div className="mx-auto max-w-2xl rounded-[24px] border border-[#E3E7E3] bg-white p-6 sm:p-8">
-              <div className="flex flex-col items-center gap-4 sm:flex-row">
-                {usuario?.foto_url ? (
-                  <img src={usuario.foto_url} alt={usuario.nome} className="h-20 w-20 rounded-full object-cover border-2 border-[#173F32]" />
-                ) : (
-                  <div className="flex h-20 w-20 items-center justify-center rounded-full bg-[#173F32] text-2xl font-bold text-[#E4FF73]">
-                    {usuario?.nome?.charAt(0).toUpperCase()}
+          {/* ABA SUPORTE (ALUNOS, PROFESSORES E VISITANTES) */}
+          {page === 'suporte' && (
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+              <div className="rounded-[24px] border border-[#E3E7E3] bg-white p-6">
+                <h2 className="text-lg font-extrabold">Falar com o Suporte</h2>
+                <p className="mt-1 text-xs text-[#738077]">
+                  Precisa solicitar a inclusão de um novo curso, relatar um problema ou tirar dúvidas com a coordenação?
+                </p>
+                <form onSubmit={handleAbrirChamadoSuporte} className="mt-5 space-y-3.5">
+                  <div>
+                    <label className="block text-xs font-bold">Assunto</label>
+                    <input required placeholder="Ex: Solicitação de novo curso / Dúvida" value={assuntoSuporte}
+                      onChange={e => setAssuntoSuporte(e.target.value)}
+                      className="mt-1 w-full rounded-xl border border-[#E2E6E2] p-3 text-xs outline-none" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold">Mensagem para a Instituição</label>
+                    <textarea required rows={4} placeholder="Descreva sua solicitação detalhadamente..." value={msgSuporte}
+                      onChange={e => setMsgSuporte(e.target.value)}
+                      className="mt-1 w-full rounded-xl border border-[#E2E6E2] p-3 text-xs outline-none" />
+                  </div>
+                  <button type="submit" className="w-full rounded-xl bg-[#173F32] py-3 text-xs font-bold text-white transition hover:bg-[#245847]">
+                    Enviar Solicitação
+                  </button>
+                </form>
+              </div>
+
+              <div className="space-y-4 lg:col-span-2">
+                <h2 className="text-lg font-extrabold">Minhas Solicitações ({chamados.length})</h2>
+                {chamados.length === 0 && (
+                  <div className="rounded-[20px] border border-[#E3E7E3] bg-white p-8 text-center text-xs text-gray-400">
+                    Você ainda não abriu nenhum chamado de suporte.
                   </div>
                 )}
+                {chamados.map(c => (
+                  <div key={c.id} className="rounded-[20px] border border-[#E3E7E3] bg-white p-5">
+                    <div className="flex items-center justify-between gap-2">
+                      <strong className="text-sm">{c.assunto}</strong>
+                      <span className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold ${
+                        c.status === 'RESPONDIDO' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-100 text-amber-800'
+                      }`}>
+                        {c.status}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-[10px] text-gray-400">Enviado em {c.criado_em}</p>
+                    <p className="mt-3 text-xs text-[#4A5850]">{c.mensagem}</p>
+
+                    {c.resposta_gestor && (
+                      <div className="mt-4 rounded-xl border border-[#C5D4CB] bg-[#EFF6F1] p-3.5 text-xs">
+                        <strong className="block text-[#173F32]">Resposta da Coordenação / Suporte:</strong>
+                        <p className="mt-1 text-[#254437]">{c.resposta_gestor}</p>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* PAINEL EXCLUSIVO DO GESTOR / ENTIDADE */}
+          {page === 'gestor' && usuario?.papel === 'GESTOR' && (
+            <div className="space-y-8">
+              <div>
+                <h1 className="text-2xl font-extrabold">Painel de Gestão Institucional</h1>
+                <p className="mt-1 text-xs text-[#738077]">Administre os cursos ofertados pela faculdade, acompanhe indicadores e responda ao suporte.</p>
+              </div>
+
+              {metricasGestor && (
+                <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+                  <div className="rounded-[20px] border border-[#E3E7E3] bg-white p-5">
+                    <span className="text-[11px] font-bold text-[#78827C]">Comunidade Ativa</span>
+                    <strong className="mt-1 block text-2xl font-extrabold text-[#173F32]">{metricasGestor.total_usuarios}</strong>
+                    <small className="text-[10px] text-[#4F836F]">{metricasGestor.total_alunos} alunos · {metricasGestor.total_professores} docentes</small>
+                  </div>
+                  <div className="rounded-[20px] border border-[#E3E7E3] bg-white p-5">
+                    <span className="text-[11px] font-bold text-[#78827C]">Projetos Criados</span>
+                    <strong className="mt-1 block text-2xl font-extrabold text-[#173F32]">{metricasGestor.total_projetos}</strong>
+                    <small className="text-[10px] text-[#4F836F]">{metricasGestor.projetos_concluidos} concluídos</small>
+                  </div>
+                  <div className="rounded-[20px] border border-[#E3E7E3] bg-white p-5">
+                    <span className="text-[11px] font-bold text-[#78827C]">Palestras & Mentorias</span>
+                    <strong className="mt-1 block text-2xl font-extrabold text-[#173F32]">{metricasGestor.total_sessoes}</strong>
+                    <small className="text-[10px] text-[#4F836F]">Eventos registrados</small>
+                  </div>
+                  <div className="rounded-[20px] border border-[#E3E7E3] bg-white p-5">
+                    <span className="text-[11px] font-bold text-[#78827C]">Chamados Abertos</span>
+                    <strong className="mt-1 block text-2xl font-extrabold text-amber-700">{metricasGestor.chamados_abertos}</strong>
+                    <small className="text-[10px] text-gray-500">Aguardando resposta</small>
+                  </div>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 gap-8 lg:grid-cols-2">
+                <div className="rounded-[24px] border border-[#E3E7E3] bg-white p-6">
+                  <h2 className="text-base font-extrabold">Catálogo Oficial de Cursos</h2>
+                  <p className="mt-1 text-xs text-[#738077]">Estes cursos aparecem no menu suspenso de cadastro e perfil.</p>
+
+                  <form onSubmit={handleCadastrarCursoGestor} className="mt-4 flex flex-col gap-2 sm:flex-row">
+                    <input required placeholder="Nome do curso (ex: Biomedicina)" value={novoCursoNome}
+                      onChange={e => setNovoCursoNome(e.target.value)} className="flex-1 rounded-xl border p-2.5 text-xs" />
+                    <select value={novoCursoArea} onChange={e => setNovoCursoArea(e.target.value)} className="rounded-xl border p-2.5 text-xs">
+                      <option value="Tecnologia">Tecnologia</option>
+                      <option value="Saúde">Saúde</option>
+                      <option value="Humanas">Humanas</option>
+                      <option value="Exatas">Exatas</option>
+                      <option value="Negócios">Negócios</option>
+                    </select>
+                    <button type="submit" className="rounded-xl bg-[#173F32] px-4 py-2.5 text-xs font-bold text-white">
+                      + Adicionar
+                    </button>
+                  </form>
+
+                  <div className="mt-4 max-h-80 space-y-2 overflow-y-auto">
+                    {todosCursosGestor.map(c => (
+                      <div key={c.id} className="flex items-center justify-between rounded-xl border bg-[#F7F8F5] p-3 text-xs">
+                        <div>
+                          <strong className={!c.ativo ? 'line-through text-gray-400' : ''}>{c.nome}</strong>
+                          <span className="ml-2 rounded bg-white px-2 py-0.5 text-[10px] text-gray-500">{c.area}</span>
+                        </div>
+                        <button onClick={() => handleToggleCursoGestor(c.id)}
+                          className={`rounded-lg px-2.5 py-1 text-[10px] font-bold ${
+                            c.ativo ? 'bg-red-50 text-red-600' : 'bg-emerald-50 text-emerald-700'
+                          }`}>
+                          {c.ativo ? 'Desativar' : 'Reativar'}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="rounded-[24px] border border-[#E3E7E3] bg-white p-6">
+                  <h2 className="text-base font-extrabold">Atendimento ao Suporte ({chamados.length})</h2>
+                  <div className="mt-4 max-h-[420px] space-y-3 overflow-y-auto">
+                    {chamados.length === 0 && <p className="text-xs text-gray-400">Nenhum chamado registrado.</p>}
+                    {chamados.map(c => (
+                      <div key={c.id} className="rounded-xl border border-[#E5E8E4] bg-[#F9FAF8] p-4 text-xs">
+                        <div className="flex items-center justify-between">
+                          <strong>{c.assunto}</strong>
+                          <span className={`rounded px-2 py-0.5 text-[9px] font-bold ${
+                            c.status === 'RESPONDIDO' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-900'
+                          }`}>{c.status}</span>
+                        </div>
+                        <p className="mt-0.5 text-[10px] text-gray-500">Por: {c.usuario_nome} ({c.usuario_papel}) · {c.criado_em}</p>
+                        <p className="mt-2 text-[#33453B]">{c.mensagem}</p>
+
+                        {c.resposta_gestor ? (
+                          <div className="mt-3 rounded-lg bg-[#EFF6F1] p-2.5 text-[11px] text-[#173F32]">
+                            <strong>Respondido:</strong> {c.resposta_gestor}
+                          </div>
+                        ) : (
+                          <div className="mt-3 flex gap-2">
+                            <input
+                              placeholder="Escreva a resposta oficial..."
+                              value={respostasChamados[c.id] || ''}
+                              onChange={e => setRespostasChamados({ ...respostasChamados, [c.id]: e.target.value })}
+                              className="flex-1 rounded-lg border bg-white px-3 py-2 text-xs outline-none"
+                            />
+                            <button onClick={() => handleResponderChamadoGestor(c.id)}
+                              className="rounded-lg bg-[#173F32] px-3 py-2 text-xs font-bold text-white">
+                              Responder
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ABA MEU PERFIL */}
+          {page === 'perfil' && (
+            <div className="mx-auto max-w-2xl rounded-[24px] border border-[#E3E7E3] bg-white p-6 sm:p-8">
+              <div className="flex flex-col items-center gap-5 sm:flex-row">
+                <label className="group relative cursor-pointer" title="Clique para trocar sua foto de perfil">
+                  {previewFotoPerfil || usuario?.foto_url ? (
+                    <img
+                      src={previewFotoPerfil || usuario?.foto_url}
+                      alt={usuario?.nome}
+                      className="h-24 w-24 rounded-full object-cover border-2 border-[#173F32] transition group-hover:opacity-75"
+                    />
+                  ) : (
+                    <div className="flex h-24 w-24 items-center justify-center rounded-full bg-[#173F32] text-3xl font-bold text-[#E4FF73] transition group-hover:opacity-85">
+                      {usuario?.nome?.charAt(0).toUpperCase()}
+                    </div>
+                  )}
+                  <span className="absolute bottom-0 right-0 rounded-full bg-[#E4FF73] px-2 py-0.5 text-[10px] font-extrabold text-[#173F32] shadow">
+                    Editar foto
+                  </span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={e => handleSelecionarFotoPerfil(e.target.files?.[0] || null)}
+                    className="hidden"
+                  />
+                </label>
+
                 <div>
                   <span className="rounded-full bg-[#EAF2ED] px-3 py-1 text-[10px] font-extrabold text-[#173F32]">{usuario?.papel}</span>
                   <h2 className="mt-1 text-xl font-bold">{usuario?.nome}</h2>
                   <p className="text-xs text-[#738077]">CPF: {usuario?.cpf} · E-mail: {usuario?.email}</p>
+                  {fotoPerfil && (
+                    <p className="mt-1 text-[11px] font-bold text-[#1C5A45]">Nova foto selecionada: {fotoPerfil.name} (clique em Salvar)</p>
+                  )}
                 </div>
               </div>
 
               <form onSubmit={handleSalvarPerfil} className="mt-6 space-y-4">
-                <div>
-                  <label className="block text-xs font-bold">Alterar Foto de Perfil</label>
-                  <input type="file" accept="image/*" onChange={e => setFotoPerfil(e.target.files?.[0] || null)}
-                    className="mt-1 w-full rounded-xl border border-[#E2E6E2] p-2.5 text-xs" />
-                </div>
-
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <div>
                     <label className="block text-xs font-bold">Nome Completo</label>
@@ -1078,9 +1505,18 @@ export default function App() {
 
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <div>
-                    <label className="block text-xs font-bold">Curso / Departamento</label>
-                    <input required value={editCurso} onChange={e => setEditCurso(e.target.value)}
-                      className="mt-1 w-full rounded-xl border border-[#E2E6E2] p-3 text-xs outline-none" />
+                    <label className="block text-xs font-bold">Curso / Vínculo</label>
+                    {usuario?.papel === 'VISITANTE' || usuario?.papel === 'GESTOR' ? (
+                      <input required value={editCurso} onChange={e => setEditCurso(e.target.value)}
+                        className="mt-1 w-full rounded-xl border border-[#E2E6E2] p-3 text-xs outline-none" />
+                    ) : (
+                      <select value={editCurso} onChange={e => setEditCurso(e.target.value)}
+                        className="mt-1 w-full rounded-xl border border-[#E2E6E2] bg-white p-3 text-xs font-semibold outline-none">
+                        {cursosAtivos.map(c => (
+                          <option key={c.id} value={c.nome}>{c.nome}</option>
+                        ))}
+                      </select>
+                    )}
                   </div>
                   <div>
                     <label className="block text-xs font-bold">Link do LinkedIn / Portfólio</label>
@@ -1102,7 +1538,7 @@ export default function App() {
                 </div>
 
                 <button type="submit" className="rounded-xl bg-[#173F32] px-6 py-3 text-xs font-bold text-white transition hover:bg-[#245847]">
-                  Salvar Perfil
+                  Salvar Alterações
                 </button>
               </form>
             </div>
@@ -1110,7 +1546,7 @@ export default function App() {
         </main>
       </div>
 
-      {/* Modal Criar Projeto com Modalidade Condicional */}
+      {/* Modal Criar Projeto */}
       {modalNovoProjeto && (
         <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/40 p-4 backdrop-blur-xs">
           <div className="animate-modal my-8 w-full max-w-lg rounded-[24px] bg-white p-6">
@@ -1136,7 +1572,6 @@ export default function App() {
                 </select>
               </div>
 
-              {/* Campos Condicionais de Localização */}
               {(novaModalidadeProj === 'PRESENCIAL' || novaModalidadeProj === 'SEMIPRESENCIAL') && (
                 <input required placeholder="Local na Instituição (ex: Bloco B - Lab de Redes 02)" value={novoLocalProj}
                   onChange={e => setNovoLocalProj(e.target.value)} className="w-full rounded-xl border border-[#4F836F] bg-[#F7F8F5] p-3 text-xs" />
@@ -1190,7 +1625,7 @@ export default function App() {
         </div>
       )}
 
-      {/* Modal Gerenciar Projeto Existente */}
+      {/* Modal Gerenciar Projeto */}
       {projetoGerenciando && (
         <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/40 p-4 backdrop-blur-xs">
           <div className="animate-modal my-8 w-full max-w-2xl rounded-[24px] bg-white p-6">
@@ -1282,7 +1717,7 @@ export default function App() {
         </div>
       )}
 
-      {/* Modal Oferecer Mentoria / Palestra com Modalidade Condicional */}
+      {/* Modal Oferecer Mentoria / Palestra */}
       {modalNovaMentoria && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-xs">
           <div className="animate-modal w-full max-w-md rounded-[24px] bg-white p-6">
@@ -1387,7 +1822,6 @@ export default function App() {
                 </button>
               </form>
 
-              {/* Lista de Inscritos + Validação de Presença */}
               <div className="space-y-3">
                 <h3 className="text-xs font-extrabold uppercase text-[#4F836F]">
                   Inscritos ({mentoriaGerenciando.inscritos.length} / {mentoriaGerenciando.capacidade})

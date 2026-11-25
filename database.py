@@ -1,8 +1,13 @@
+import os
 from sqlmodel import SQLModel, create_engine, Session
 
-# Cria um arquivo de banco local chamado database.db (fácil de testar)
-sqlite_url = "sqlite:///database.db"
-engine = create_engine(sqlite_url, echo=True)
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./database.db")
+
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+engine = create_engine(DATABASE_URL, connect_args=connect_args)
 
 def criar_banco():
     SQLModel.metadata.create_all(engine)

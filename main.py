@@ -5,13 +5,14 @@ import uuid
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel
 from sqlmodel import Session, select
 from typing import Optional
 
-from database import criar_banco, get_session
-from models import Usuario, Projeto, VagaProjeto, MembroEquipe, Candidatura, Mentoria, InscricaoSessao, Mensagem
+from database import engine, criar_banco, get_session
+from models import Curso, Usuario, Projeto, VagaProjeto, MembroEquipe, Candidatura, Mentoria, InscricaoSessao, Mensagem, ChamadoSuporte
 from auth import gerar_hash_senha, verificar_senha, criar_token_acesso, get_usuario_atual
 
 app = FastAPI(title="Conecta Campus API")
@@ -30,6 +31,32 @@ app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 @app.on_event("startup")
 def on_startup():
     criar_banco()
+    with Session(engine) as session:
+        if not session.exec(select(Curso)).first():
+            cursos_iniciais = [
+                Curso(nome="Análise e Desenvolvimento de Sistemas", area="Tecnologia"),
+                Curso(nome="Engenharia de Software", area="Tecnologia"),
+                Curso(nome="Direito", area="Humanas"),
+                Curso(nome="Administração", area="Negócios"),
+                Curso(nome="Psicologia", area="Saúde"),
+                Curso(nome="Enfermagem", area="Saúde"),
+                Curso(nome="Arquitetura e Urbanismo", area="Exatas"),
+            ]
+            session.add_all(cursos_iniciais)
+
+        if not session.exec(select(Usuario).where(Usuario.email == "gestor@faculdade.edu.br")).first():
+            gestor = Usuario(
+                nome="Coordenação Acadêmica",
+                email="gestor@faculdade.edu.br",
+                cpf="00000000000",
+                data_nascimento="01/01/2000",
+                senha_hash=gerar_hash_senha("admin123"),
+                curso="Gestão Institucional",
+                papel="GESTOR",
+                bio="Conta oficial de administração da instituição e suporte aos estudantes."
+            )
+            session.add(gestor)
+        session.commit()
 
 def salvar_imagem(arquivo: Optional[UploadFile]) -> Optional[str]:
     if not arquivo or not arquivo.filename:
@@ -39,7 +66,7 @@ def salvar_imagem(arquivo: Optional[UploadFile]) -> Optional[str]:
     caminho = os.path.join(UPLOAD_DIR, nome_unico)
     with open(caminho, "wb") as buffer:
         shutil.copyfileobj(arquivo.file, buffer)
-    return f"http://127.0.0.1:8000/uploads/{nome_unico}"
+    return f"/uploads/{nome_unico}"
 
 # --- SCHEMAS ---
 class UsuarioCadastro(BaseModel):
@@ -78,6 +105,50 @@ class EditarMentoriaInput(BaseModel):
     capacidade: int = 1
     status: str
 
+class NovoCursoInput(BaseModel):
+    nome: str
+    area: str
+
+class NovoChamadoInput(BaseModel):
+    assunto: str
+    mensagem: str
+
+class ResponderChamadoInput(BaseModel):
+    resposta_gestor: str
+
+# --- 0. CURSOS DA INSTITUIÇÃO ---
+
+@app.get("/cursos")
+def listar_cursos(apenas_ativos: bool = True, session: Session = Depends(get_session)):
+    query = select(Curso)
+    if apenas_ativos:
+        query = query.where(Curso.ativo == True)
+    return session.exec(query).all()
+
+@app.post("/cursos")
+def criar_curso(dados: NovoCursoInput, usuario: Usuario = Depends(get_usuario_atual), session: Session = Depends(get_session)):
+    if usuario.papel != "GESTOR":
+        raise HTTPException(status_code=403, detail="Apenas o Gestor Institucional pode cadastrar cursos.")
+    if session.exec(select(Curso).where(Curso.nome == dados.nome)).first():
+        raise HTTPException(status_code=400, detail="Este curso já está cadastrado.")
+    novo = Curso(nome=dados.nome, area=dados.area)
+    session.add(novo)
+    session.commit()
+    session.refresh(novo)
+    return {"mensagem": f"Curso '{dados.nome}' adicionado ao catálogo!", "id": novo.id}
+
+@app.patch("/cursos/{curso_id}/toggle")
+def alternar_status_curso(curso_id: int, usuario: Usuario = Depends(get_usuario_atual), session: Session = Depends(get_session)):
+    if usuario.papel != "GESTOR":
+        raise HTTPException(status_code=403, detail="Sem permissão.")
+    curso = session.get(Curso, curso_id)
+    if not curso:
+        raise HTTPException(status_code=404, detail="Curso não encontrado.")
+    curso.ativo = not curso.ativo
+    session.add(curso)
+    session.commit()
+    return {"mensagem": f"Curso {'ativado' if curso.ativo else 'desativado'}!"}
+
 # --- 1. AUTENTICAÇÃO E PERFIL ---
 
 @app.post("/cadastro")
@@ -92,10 +163,14 @@ def cadastrar_usuario(dados: UsuarioCadastro, session: Session = Depends(get_ses
     if session.exec(select(Usuario).where(Usuario.cpf == cpf_limpo)).first():
         raise HTTPException(status_code=400, detail="Já existe uma conta cadastrada com este CPF.")
 
+    papel_seguro = dados.papel.upper()
+    if papel_seguro not in ["ALUNO", "PROFESSOR", "VISITANTE"]:
+        papel_seguro = "ALUNO"
+
     novo = Usuario(
         nome=dados.nome, email=dados.email, cpf=cpf_limpo,
         data_nascimento=dados.data_nascimento, senha_hash=gerar_hash_senha(dados.senha),
-        curso=dados.curso, papel=dados.papel.upper()
+        curso=dados.curso, papel=papel_seguro
     )
     session.add(novo)
     session.commit()
@@ -141,7 +216,62 @@ def atualizar_perfil(
     session.refresh(usuario)
     return {"mensagem": "Perfil atualizado com sucesso!", "novo_progresso": usuario.perfil_progresso}
 
-# --- 2. PROJETOS, MODALIDADE, VAGAS E ENTREGA FINAL ---
+# --- 2. SUPORTE & PAINEL DO GESTOR ---
+
+@app.post("/suporte")
+def abrir_chamado_suporte(dados: NovoChamadoInput, usuario: Usuario = Depends(get_usuario_atual), session: Session = Depends(get_session)):
+    chamado = ChamadoSuporte(
+        usuario_id=usuario.id,
+        usuario_nome=usuario.nome,
+        usuario_papel=usuario.papel,
+        assunto=dados.assunto,
+        mensagem=dados.mensagem
+    )
+    session.add(chamado)
+    session.commit()
+    return {"mensagem": "Solicitação enviada ao suporte institucional!"}
+
+@app.get("/suporte")
+def listar_chamados_suporte(usuario: Usuario = Depends(get_usuario_atual), session: Session = Depends(get_session)):
+    if usuario.papel == "GESTOR":
+        return session.exec(select(ChamadoSuporte)).all()
+    return session.exec(select(ChamadoSuporte).where(ChamadoSuporte.usuario_id == usuario.id)).all()
+
+@app.patch("/suporte/{chamado_id}/responder")
+def responder_chamado_suporte(
+    chamado_id: int, dados: ResponderChamadoInput,
+    usuario: Usuario = Depends(get_usuario_atual), session: Session = Depends(get_session)
+):
+    if usuario.papel != "GESTOR":
+        raise HTTPException(status_code=403, detail="Apenas o Gestor pode responder chamados.")
+    chamado = session.get(ChamadoSuporte, chamado_id)
+    if not chamado:
+        raise HTTPException(status_code=404, detail="Chamado não encontrado.")
+    chamado.resposta_gestor = dados.resposta_gestor
+    chamado.status = "RESPONDIDO"
+    session.add(chamado)
+    session.commit()
+    return {"mensagem": "Resposta enviada ao usuário!"}
+
+@app.get("/gestor/metricas")
+def obter_metricas_institucionais(usuario: Usuario = Depends(get_usuario_atual), session: Session = Depends(get_session)):
+    if usuario.papel != "GESTOR":
+        raise HTTPException(status_code=403, detail="Acesso restrito ao Gestor.")
+    usuarios = session.exec(select(Usuario)).all()
+    projetos = session.exec(select(Projeto)).all()
+    sessoes = session.exec(select(Mentoria)).all()
+    chamados = session.exec(select(ChamadoSuporte)).all()
+    return {
+        "total_usuarios": len(usuarios),
+        "total_alunos": sum(1 for u in usuarios if u.papel == "ALUNO"),
+        "total_professores": sum(1 for u in usuarios if u.papel == "PROFESSOR"),
+        "total_projetos": len(projetos),
+        "projetos_concluidos": sum(1 for p in projetos if p.status == "CONCLUIDO"),
+        "total_sessoes": len(sessoes),
+        "chamados_abertos": sum(1 for c in chamados if c.status == "ABERTO"),
+    }
+
+# --- 3. PROJETOS, MODALIDADE, VAGAS E ENTREGA FINAL ---
 
 @app.get("/projetos")
 def listar_projetos(categoria: Optional[str] = None, session: Session = Depends(get_session)):
@@ -163,17 +293,10 @@ def listar_projetos(categoria: Optional[str] = None, session: Session = Depends(
 
 @app.post("/projetos")
 def criar_projeto(
-    titulo: str = Form(...),
-    categoria: str = Form(...),
-    modalidade: str = Form("PRESENCIAL"),
-    localizacao: str = Form(""),
-    link_reuniao: str = Form(""),
-    descricao: str = Form(...),
-    tags: str = Form(...),
-    vagas_json: str = Form(...),
-    foto: Optional[UploadFile] = File(None),
-    usuario: Usuario = Depends(get_usuario_atual),
-    session: Session = Depends(get_session)
+    titulo: str = Form(...), categoria: str = Form(...), modalidade: str = Form("PRESENCIAL"),
+    localizacao: str = Form(""), link_reuniao: str = Form(""), descricao: str = Form(...),
+    tags: str = Form(...), vagas_json: str = Form(...), foto: Optional[UploadFile] = File(None),
+    usuario: Usuario = Depends(get_usuario_atual), session: Session = Depends(get_session)
 ):
     url_foto = salvar_imagem(foto)
     novo = Projeto(
@@ -190,10 +313,8 @@ def criar_projeto(
     lista_vagas = json.loads(vagas_json)
     for v in lista_vagas:
         nova_vaga = VagaProjeto(
-            projeto_id=novo.id,
-            titulo_vaga=v["titulo_vaga"],
-            competencias_vaga=v["competencias_vaga"],
-            quantidade=int(v.get("quantidade", 1))
+            projeto_id=novo.id, titulo_vaga=v["titulo_vaga"],
+            competencias_vaga=v["competencias_vaga"], quantidade=int(v.get("quantidade", 1))
         )
         session.add(nova_vaga)
 
@@ -204,19 +325,11 @@ def criar_projeto(
 
 @app.put("/projetos/{projeto_id}")
 def editar_projeto(
-    projeto_id: int,
-    titulo: str = Form(...),
-    categoria: str = Form(...),
-    status: str = Form(...),
-    modalidade: str = Form(...),
-    localizacao: str = Form(""),
-    link_reuniao: str = Form(""),
-    link_entrega: str = Form(""),
-    descricao: str = Form(...),
-    tags: str = Form(...),
-    foto: Optional[UploadFile] = File(None),
-    usuario: Usuario = Depends(get_usuario_atual),
-    session: Session = Depends(get_session)
+    projeto_id: int, titulo: str = Form(...), categoria: str = Form(...),
+    status: str = Form(...), modalidade: str = Form(...), localizacao: str = Form(""),
+    link_reuniao: str = Form(""), link_entrega: str = Form(""), descricao: str = Form(...),
+    tags: str = Form(...), foto: Optional[UploadFile] = File(None),
+    usuario: Usuario = Depends(get_usuario_atual), session: Session = Depends(get_session)
 ):
     projeto = session.get(Projeto, projeto_id)
     if not projeto or projeto.criador_id != usuario.id:
@@ -275,7 +388,7 @@ def apadrinhar_projeto(projeto_id: int, usuario: Usuario = Depends(get_usuario_a
     session.commit()
     return {"mensagem": f"Você agora orienta o projeto {projeto.titulo}!"}
 
-# --- 3. CANDIDATURA POR VAGA E CHAT ---
+# --- 4. CANDIDATURA E CHAT ---
 
 @app.post("/vagas/{vaga_id}/candidatar")
 def candidatar_vaga(vaga_id: int, usuario: Usuario = Depends(get_usuario_atual), session: Session = Depends(get_session)):
@@ -375,7 +488,7 @@ def enviar_mensagem(candidatura_id: int, dados: NovaMensagem, usuario: Usuario =
     session.refresh(nova)
     return nova
 
-# --- 4. MENTORIAS, PALESTRAS, LOTAÇÃO E CHECK-IN DE PRESENÇA ---
+# --- 5. MENTORIAS E PALESTRAS ---
 
 @app.get("/mentorias")
 def listar_mentorias(session: Session = Depends(get_session)):
@@ -461,13 +574,23 @@ def confirmar_presenca_inscrito(
     usuario: Usuario = Depends(get_usuario_atual), session: Session = Depends(get_session)
 ):
     inscricao = session.get(InscricaoSessao, inscricao_id)
-    if not inscricao:
-        raise HTTPException(status_code=404, detail="Inscrição não encontrada.")
     mentoria = session.get(Mentoria, inscricao.mentoria_id)
     if mentoria.mentor_id != usuario.id:
         raise HTTPException(status_code=403, detail="Apenas o ministrante pode validar presença.")
-
     inscricao.presente = presente
     session.add(inscricao)
     session.commit()
     return {"mensagem": "Presença validada para horas complementares!" if presente else "Presença desmarcada."}
+
+# --- 6. SERVIR FRONT-END REACT COMPILADO EM PRODUÇÃO ---
+FRONTEND_DIST = os.path.join(os.path.dirname(__file__), "conecta-campus-frontend", "dist")
+
+if os.path.exists(FRONTEND_DIST):
+    app.mount("/assets", StaticFiles(directory=os.path.join(FRONTEND_DIST, "assets")), name="assets")
+
+    @app.get("/{full_path:path}")
+    def servir_react(full_path: str):
+        arquivo_solicitado = os.path.join(FRONTEND_DIST, full_path)
+        if full_path and os.path.isfile(arquivo_solicitado):
+            return FileResponse(arquivo_solicitado)
+        return FileResponse(os.path.join(FRONTEND_DIST, "index.html"))
